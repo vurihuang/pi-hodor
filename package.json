@@ -1,0 +1,46 @@
+{
+  "name": "pi-hodor",
+  "version": "0.1.0",
+  "description": "A pi extension that automatically continues after transient stream and connection errors.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "extension",
+    "retry",
+    "error-recovery"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vurihuang/pi-hodor.git"
+  },
+  "homepage": "https://github.com/vurihuang/pi-hodor#readme",
+  "bugs": {
+    "url": "https://github.com/vurihuang/pi-hodor/issues"
+  },
+  "files": [
+    "index.ts",
+    "config.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}
