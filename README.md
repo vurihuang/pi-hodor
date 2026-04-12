@@ -158,34 +158,6 @@ pi install git:github.com/vurihuang/pi-hodor
 
 Restart pi after updating.
 
-## Publish to npm
-
-1. Make sure the `pi-hodor` package name is available on npm.
-
-2. Log in to npm:
-
-   ```bash
-   npm login
-   ```
-
-3. Optionally bump the version:
-
-   ```bash
-   npm version patch
-   ```
-
-4. Verify the package contents:
-
-   ```bash
-   npm pack --dry-run
-   ```
-
-5. Publish the package:
-
-   ```bash
-   npm publish
-   ```
-
 ## Install as a pi package
 
 This project is already structured as a pi package via the `pi` field in `package.json`:
