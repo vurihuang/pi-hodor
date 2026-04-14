@@ -19,7 +19,7 @@ It is useful when model output is interrupted by provider-side failures such as 
 - Automatically sends a retry message when a match is found
 - Prevents runaway loops with a configurable retry limit
 - Optionally shows UI notifications when an auto-retry happens
-- Supports project-level config overrides without modifying the packaged files
+- Supports project-level and global config overrides without modifying the packaged files
 
 ## Installation
 
@@ -78,17 +78,86 @@ The default retry message is:
 "continue"
 ```
 
+## Setup command
+
+If you want a reusable global config, run:
+
+```text
+/pi-hodor:setup
+```
+
+What this command does:
+
+1. ensures the bundled default config exists inside the package
+2. creates the global config directory if needed
+3. copies the bundled default config to:
+   `~/.pi/agent/extensions/pi-hodor/config.json`
+4. does **not** overwrite the file if it already exists
+
+So `/pi-hodor:setup` is a one-time bootstrap command for creating your editable global config file.
+
+If the global config already exists, the command shows a warning and leaves your existing file unchanged.
+
 ## Configuration
 
 Configuration is resolved in this order:
 
 1. `./.pi-hodor.json`
 2. `./.pi/pi-hodor.json`
-3. the bundled `config.json` inside this package
+3. `~/.pi/agent/extensions/pi-hodor/config.json`
+4. the bundled `config.json` inside this package
 
-This keeps the package defaults intact while allowing per-project overrides.
+That means:
+
+- project config overrides global config
+- global config overrides the packaged defaults
+- packaged defaults are only used when no override file exists
+
+Use project config when you want repo-specific behavior.
+Use the global config when you want the same defaults across all projects.
+
+### Path details
+
+#### 1. Project config in repo root
+
+```text
+./.pi-hodor.json
+```
+
+Best for a single repository.
+
+#### 2. Project config in `.pi`
+
+```text
+./.pi/pi-hodor.json
+```
+
+Also project-scoped, useful if you prefer keeping pi-related files together.
+
+#### 3. Global config
+
+```text
+~/.pi/agent/extensions/pi-hodor/config.json
+```
+
+Best for personal defaults shared across projects.
+You can generate this file with `/pi-hodor:setup`.
+
+#### 4. Bundled fallback config
+
+The package ships with its own `config.json`, which acts as the final fallback when no project or global override exists.
+
+### Example flow
+
+- You install `pi-hodor`
+- You run `/pi-hodor:setup`
+- The extension creates `~/.pi/agent/extensions/pi-hodor/config.json`
+- You edit that file to define your global defaults
+- In one specific repo, you add `./.pi-hodor.json`
+- That repo now uses its local config instead of your global one
 
 ### Example config
+
 
 ```json
 {

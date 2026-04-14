@@ -1,5 +1,6 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 type NotifyLevel = "info" | "success" | "warning" | "error";
@@ -27,6 +28,7 @@ interface AutoContinueConfig {
 
 const EXTENSION_NAME = "pi-hodor";
 const BUNDLED_CONFIG_PATH = join(__dirname, "config.json");
+const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", "extensions", EXTENSION_NAME, "config.json");
 const PROJECT_CONFIG_CANDIDATES = [
 	".pi-hodor.json",
 	join(".pi", "pi-hodor.json"),
@@ -103,18 +105,34 @@ async function ensureBundledConfigFile() {
 	}
 }
 
+async function pathExists(path: string) {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function resolveConfigPath(cwd: string) {
 	for (const relativePath of PROJECT_CONFIG_CANDIDATES) {
 		const candidatePath = join(cwd, relativePath);
-		try {
-			await access(candidatePath);
+		if (await pathExists(candidatePath)) {
 			return candidatePath;
-		} catch {
-			// Keep searching.
 		}
 	}
 
+	if (await pathExists(GLOBAL_CONFIG_PATH)) {
+		return GLOBAL_CONFIG_PATH;
+	}
+
 	return BUNDLED_CONFIG_PATH;
+}
+
+async function copyBundledConfig(destinationPath: string) {
+	await ensureBundledConfigFile();
+	await mkdir(dirname(destinationPath), { recursive: true });
+	await copyFile(BUNDLED_CONFIG_PATH, destinationPath);
 }
 
 async function loadConfig(ctx: QueueAwareContext, lastConfigError: { value?: string }) {
@@ -166,6 +184,19 @@ export default function (pi: ExtensionAPI) {
 	let consecutiveAutoRetries = 0;
 	let pendingAutoRetryMessage: string | undefined;
 	const lastConfigError: { value?: string } = {};
+
+	pi.registerCommand("pi-hodor:setup", {
+		description: `Copy the default ${EXTENSION_NAME} config to ${GLOBAL_CONFIG_PATH}`,
+		handler: async (_args, ctx) => {
+			if (await pathExists(GLOBAL_CONFIG_PATH)) {
+				ctx.ui.notify(`[${EXTENSION_NAME}] Config already exists at ${GLOBAL_CONFIG_PATH}`, "warning");
+				return;
+			}
+
+			await copyBundledConfig(GLOBAL_CONFIG_PATH);
+			ctx.ui.notify(`[${EXTENSION_NAME}] Config copied to ${GLOBAL_CONFIG_PATH}`, "info");
+		},
+	});
 
 	pi.on("session_start", async () => {
 		await ensureBundledConfigFile();
