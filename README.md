@@ -1,5 +1,9 @@
 # pi-hodor
 
+<p align="center">
+  <img src="./showcase.png" alt="pi-hodor showcase" width="960" />
+</p>
+
 [![npm version](https://img.shields.io/npm/v/pi-hodor)](https://www.npmjs.com/package/pi-hodor)
 [![npm downloads](https://img.shields.io/npm/dm/pi-hodor)](https://www.npmjs.com/package/pi-hodor)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
