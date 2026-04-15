@@ -3,6 +3,8 @@
   "retryMessage": "continue",
   "maxConsecutiveAutoRetries": 99,
   "notifyOnAutoContinue": true,
+  "autoContinueOnLength": true,
+  "autoContinueOnThinkingOnlyStop": true,
   "errorPatterns": [
     "error decoding response body",
     "stream disconnected before completion",

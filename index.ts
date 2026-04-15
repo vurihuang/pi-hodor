@@ -23,6 +23,8 @@ interface AutoContinueConfig {
 	retryMessage: string;
 	maxConsecutiveAutoRetries: number;
 	notifyOnAutoContinue: boolean;
+	autoContinueOnLength: boolean;
+	autoContinueOnThinkingOnlyStop: boolean;
 	errorPatterns: string[];
 }
 
@@ -38,6 +40,8 @@ const DEFAULT_CONFIG: AutoContinueConfig = {
 	retryMessage: "continue",
 	maxConsecutiveAutoRetries: 99,
 	notifyOnAutoContinue: true,
+	autoContinueOnLength: true,
+	autoContinueOnThinkingOnlyStop: true,
 	errorPatterns: [
 		"上游流式响应中断",
 		"error decoding response body",
@@ -88,6 +92,14 @@ function normalizeConfig(raw: unknown): AutoContinueConfig {
 			typeof config.notifyOnAutoContinue === "boolean"
 				? config.notifyOnAutoContinue
 				: DEFAULT_CONFIG.notifyOnAutoContinue,
+		autoContinueOnLength:
+			typeof config.autoContinueOnLength === "boolean"
+				? config.autoContinueOnLength
+				: DEFAULT_CONFIG.autoContinueOnLength,
+		autoContinueOnThinkingOnlyStop:
+			typeof config.autoContinueOnThinkingOnlyStop === "boolean"
+				? config.autoContinueOnThinkingOnlyStop
+				: DEFAULT_CONFIG.autoContinueOnThinkingOnlyStop,
 		errorPatterns: errorPatterns.length > 0 ? errorPatterns : DEFAULT_CONFIG.errorPatterns,
 	};
 }
@@ -180,6 +192,51 @@ function matchesConfiguredError(errorText: string, patterns: string[]) {
 	return patterns.some((pattern) => normalizedError.includes(pattern.toLowerCase()));
 }
 
+function hasContentBlockType(content: unknown, type: string) {
+	return Array.isArray(content) && content.some((block) => isRecord(block) && block.type === type);
+}
+
+function isThinkingOnlyStop(content: unknown) {
+	return (
+		hasContentBlockType(content, "thinking") &&
+		!hasContentBlockType(content, "text") &&
+		!hasContentBlockType(content, "toolCall")
+	);
+}
+
+function getAutoContinueReason(message: {
+	stopReason?: string;
+	content?: unknown;
+	errorMessage?: string;
+}, config: AutoContinueConfig) {
+	if (message.stopReason === "error") {
+		const errorText = [message.errorMessage, extractTextBlocks(message.content)]
+			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+			.join("\n");
+		if (!errorText || !matchesConfiguredError(errorText, config.errorPatterns)) return undefined;
+		return {
+			kind: "error",
+			notification: "Matched a configured error",
+		};
+	}
+
+	if (message.stopReason === "length" && config.autoContinueOnLength) {
+		return {
+			kind: "length",
+			notification: "Assistant stopped with stopReason \"length\"",
+		};
+	}
+
+	if (message.stopReason === "stop" && config.autoContinueOnThinkingOnlyStop && isThinkingOnlyStop(message.content)) {
+		return {
+			kind: "thinkingOnlyStop",
+			notification: "Assistant stopped after emitting only thinking content",
+		};
+	}
+
+	return undefined;
+}
+
 export default function (pi: ExtensionAPI) {
 	let consecutiveAutoRetries = 0;
 	let pendingAutoRetryMessage: string | undefined;
@@ -216,14 +273,27 @@ export default function (pi: ExtensionAPI) {
 
 		if (event.message.role !== "assistant") return;
 
-		if (event.message.stopReason !== "error") {
+		const retryableStopReasons = new Set(["error", "length", "stop"]);
+		if (!retryableStopReasons.has(event.message.stopReason)) {
 			consecutiveAutoRetries = 0;
 			pendingAutoRetryMessage = undefined;
 			return;
 		}
 
 		const config = await loadConfig(ctx as QueueAwareContext, lastConfigError);
-		if (!config.enabled) return;
+		if (!config.enabled) {
+			consecutiveAutoRetries = 0;
+			pendingAutoRetryMessage = undefined;
+			return;
+		}
+
+		const autoContinueReason = getAutoContinueReason(event.message, config);
+		if (!autoContinueReason) {
+			consecutiveAutoRetries = 0;
+			pendingAutoRetryMessage = undefined;
+			return;
+		}
+
 		if (ctx.hasPendingMessages()) return;
 		if (consecutiveAutoRetries >= config.maxConsecutiveAutoRetries) {
 			if (config.notifyOnAutoContinue) {
@@ -236,17 +306,12 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const errorText = [event.message.errorMessage, extractTextBlocks(event.message.content)]
-			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-			.join("\n");
-		if (!errorText || !matchesConfiguredError(errorText, config.errorPatterns)) return;
-
 		consecutiveAutoRetries += 1;
 		pendingAutoRetryMessage = config.retryMessage;
 		if (config.notifyOnAutoContinue) {
 			safeNotify(
 				ctx as QueueAwareContext,
-				`[${EXTENSION_NAME}] Matched a configured error. Sending \"${config.retryMessage}\" automatically (${consecutiveAutoRetries}/${config.maxConsecutiveAutoRetries}).`,
+				`[${EXTENSION_NAME}] ${autoContinueReason.notification}. Sending \"${config.retryMessage}\" automatically (${consecutiveAutoRetries}/${config.maxConsecutiveAutoRetries}).`,
 				"info",
 			);
 		}

@@ -8,15 +8,17 @@
 [![npm downloads](https://img.shields.io/npm/dm/pi-hodor)](https://www.npmjs.com/package/pi-hodor)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`pi-hodor` is a pi extension that automatically sends a follow-up retry message when an assistant response fails because of transient streaming or connection errors.
+`pi-hodor` is a pi extension that automatically sends a follow-up retry message when an assistant response stops in a retryable way.
 
-It is useful when model output is interrupted by provider-side failures such as `ECONNRESET`, `ETIMEDOUT`, premature stream closure, or partial JSON responses. Instead of stopping and waiting for manual intervention, the extension detects the failure and sends a configurable retry message such as `continue`.
+It is useful when model output is interrupted by provider-side failures such as `ECONNRESET`, `ETIMEDOUT`, premature stream closure, or partial JSON responses. It can also continue when the assistant stops because it hit a length limit, or when it ends with a normal `stop` but only emitted thinking content and never produced user-visible text or tool calls. Instead of stopping and waiting for manual intervention, the extension detects these cases and sends a configurable retry message such as `continue`.
 
 ## Features
 
-- Watches assistant messages that end with `stopReason === "error"`
-- Matches the error text against configurable substring patterns
-- Automatically sends a retry message when a match is found
+- Watches assistant messages that end with retryable stop reasons
+- Automatically continues on `stopReason === "length"`
+- Automatically continues on `stopReason === "stop"` when the assistant emitted only thinking content
+- Matches `stopReason === "error"` text against configurable substring patterns
+- Automatically sends a configurable retry message when a match is found
 - Prevents runaway loops with a configurable retry limit
 - Optionally shows UI notifications when an auto-retry happens
 - Supports project-level and global config overrides without modifying the packaged files
@@ -65,12 +67,11 @@ You can confirm it is loaded by triggering a transient stream error during norma
 
 Once the extension is loaded, there is nothing else to trigger manually.
 
-When pi receives an assistant message that:
+When pi receives an assistant message that matches one of these conditions, `pi-hodor` automatically sends the configured retry message:
 
-1. ends with an error stop reason, and
-2. contains one of the configured error patterns,
-
-`pi-hodor` automatically sends the configured retry message.
+1. it ends with `stopReason === "error"` and its text matches one of the configured error patterns
+2. it ends with `stopReason === "length"` and `autoContinueOnLength` is enabled
+3. it ends with `stopReason === "stop"`, emitted thinking content, and emitted neither text nor tool calls, and `autoContinueOnThinkingOnlyStop` is enabled
 
 The default retry message is:
 
@@ -165,6 +166,8 @@ The package ships with its own `config.json`, which acts as the final fallback w
   "retryMessage": "continue",
   "maxConsecutiveAutoRetries": 99,
   "notifyOnAutoContinue": true,
+  "autoContinueOnLength": true,
+  "autoContinueOnThinkingOnlyStop": true,
   "errorPatterns": [
     "error decoding response body",
     "stream disconnected before completion",
@@ -181,7 +184,9 @@ The package ships with its own `config.json`, which acts as the final fallback w
 | `retryMessage` | `string` | The exact user message sent back to pi after a matched error. |
 | `maxConsecutiveAutoRetries` | `number` | Maximum automatic retries before the extension stops retrying. |
 | `notifyOnAutoContinue` | `boolean` | Shows a UI notification when an automatic retry happens or when the retry limit is reached. |
-| `errorPatterns` | `string[]` | Case-insensitive substrings used to detect transient failures. |
+| `autoContinueOnLength` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "length"`. |
+| `autoContinueOnThinkingOnlyStop` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "stop"` after emitting only thinking content and no text or tool calls. |
+| `errorPatterns` | `string[]` | Case-insensitive substrings used to detect transient failures for `stopReason === "error"`. |
 
 ## Development
 
