@@ -25,6 +25,7 @@ interface AutoContinueConfig {
 	notifyOnAutoContinue: boolean;
 	autoContinueOnLength: boolean;
 	autoContinueOnThinkingOnlyStop: boolean;
+	autoContinueOnSilentStopAfterTool: boolean;
 	errorPatterns: string[];
 }
 
@@ -42,6 +43,7 @@ const DEFAULT_CONFIG: AutoContinueConfig = {
 	notifyOnAutoContinue: true,
 	autoContinueOnLength: true,
 	autoContinueOnThinkingOnlyStop: true,
+	autoContinueOnSilentStopAfterTool: true,
 	errorPatterns: [
 		"上游流式响应中断",
 		"error decoding response body",
@@ -100,6 +102,10 @@ function normalizeConfig(raw: unknown): AutoContinueConfig {
 			typeof config.autoContinueOnThinkingOnlyStop === "boolean"
 				? config.autoContinueOnThinkingOnlyStop
 				: DEFAULT_CONFIG.autoContinueOnThinkingOnlyStop,
+		autoContinueOnSilentStopAfterTool:
+			typeof config.autoContinueOnSilentStopAfterTool === "boolean"
+				? config.autoContinueOnSilentStopAfterTool
+				: DEFAULT_CONFIG.autoContinueOnSilentStopAfterTool,
 		errorPatterns: errorPatterns.length > 0 ? errorPatterns : DEFAULT_CONFIG.errorPatterns,
 	};
 }
@@ -196,19 +202,25 @@ function hasContentBlockType(content: unknown, type: string) {
 	return Array.isArray(content) && content.some((block) => isRecord(block) && block.type === type);
 }
 
-function isThinkingOnlyStop(content: unknown) {
-	return (
-		hasContentBlockType(content, "thinking") &&
-		!hasContentBlockType(content, "text") &&
-		!hasContentBlockType(content, "toolCall")
-	);
+function hasVisibleAssistantOutput(content: unknown) {
+	return extractTextBlocks(content).length > 0 || hasContentBlockType(content, "toolCall");
 }
 
-function getAutoContinueReason(message: {
-	stopReason?: string;
-	content?: unknown;
-	errorMessage?: string;
-}, config: AutoContinueConfig) {
+function isThinkingOnlyStop(content: unknown) {
+	return hasContentBlockType(content, "thinking") && !hasVisibleAssistantOutput(content);
+}
+
+function getAutoContinueReason(
+	message: {
+		stopReason?: string;
+		content?: unknown;
+		errorMessage?: string;
+	},
+	config: AutoContinueConfig,
+	context: {
+		previousMessageRole?: string;
+	},
+) {
 	if (message.stopReason === "error") {
 		const errorText = [message.errorMessage, extractTextBlocks(message.content)]
 			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -227,10 +239,23 @@ function getAutoContinueReason(message: {
 		};
 	}
 
-	if (message.stopReason === "stop" && config.autoContinueOnThinkingOnlyStop && isThinkingOnlyStop(message.content)) {
+	if (message.stopReason !== "stop") return undefined;
+
+	if (config.autoContinueOnThinkingOnlyStop && isThinkingOnlyStop(message.content)) {
 		return {
 			kind: "thinkingOnlyStop",
 			notification: "Assistant stopped after emitting only thinking content",
+		};
+	}
+
+	if (
+		config.autoContinueOnSilentStopAfterTool &&
+		context.previousMessageRole === "toolResult" &&
+		!hasVisibleAssistantOutput(message.content)
+	) {
+		return {
+			kind: "silentStopAfterTool",
+			notification: "Assistant stopped after a tool result without emitting visible output",
 		};
 	}
 
@@ -240,6 +265,7 @@ function getAutoContinueReason(message: {
 export default function (pi: ExtensionAPI) {
 	let consecutiveAutoRetries = 0;
 	let pendingAutoRetryMessage: string | undefined;
+	let previousMessageRole: string | undefined;
 	const lastConfigError: { value?: string } = {};
 
 	pi.registerCommand("pi-hodor:setup", {
@@ -260,7 +286,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (event.message.role === "user") {
+		const messageRole = event.message.role;
+		const previousRole = previousMessageRole;
+		previousMessageRole = messageRole;
+
+		if (messageRole === "user") {
 			const userText = extractUserText(event.message.content);
 			if (pendingAutoRetryMessage && userText === pendingAutoRetryMessage) {
 				pendingAutoRetryMessage = undefined;
@@ -271,7 +301,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (event.message.role !== "assistant") return;
+		if (messageRole !== "assistant") return;
 
 		const retryableStopReasons = new Set(["error", "length", "stop"]);
 		if (!retryableStopReasons.has(event.message.stopReason)) {
@@ -287,7 +317,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const autoContinueReason = getAutoContinueReason(event.message, config);
+		const autoContinueReason = getAutoContinueReason(event.message, config, {
+			previousMessageRole: previousRole,
+		});
 		if (!autoContinueReason) {
 			consecutiveAutoRetries = 0;
 			pendingAutoRetryMessage = undefined;

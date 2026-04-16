@@ -5,6 +5,7 @@
   "notifyOnAutoContinue": true,
   "autoContinueOnLength": true,
   "autoContinueOnThinkingOnlyStop": true,
+  "autoContinueOnSilentStopAfterTool": true,
   "errorPatterns": [
     "error decoding response body",
     "stream disconnected before completion",
