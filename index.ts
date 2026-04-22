@@ -1,7 +1,13 @@
 import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+	extractUserText,
+	getAutoContinueReason,
+	type AutoContinueConfig,
+} from "./auto-continue.ts";
 
 type NotifyLevel = "info" | "success" | "warning" | "error";
 
@@ -18,19 +24,9 @@ type QueueAwareContext = NotifierContext & {
 	hasPendingMessages(): boolean;
 };
 
-interface AutoContinueConfig {
-	enabled: boolean;
-	retryMessage: string;
-	maxConsecutiveAutoRetries: number;
-	notifyOnAutoContinue: boolean;
-	autoContinueOnLength: boolean;
-	autoContinueOnThinkingOnlyStop: boolean;
-	autoContinueOnSilentStopAfterTool: boolean;
-	errorPatterns: string[];
-}
-
 const EXTENSION_NAME = "pi-hodor";
-const BUNDLED_CONFIG_PATH = join(__dirname, "config.json");
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const BUNDLED_CONFIG_PATH = join(MODULE_DIR, "config.json");
 const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", "extensions", EXTENSION_NAME, "config.json");
 const PROJECT_CONFIG_CANDIDATES = [
 	".pi-hodor.json",
@@ -176,96 +172,11 @@ async function loadConfig(ctx: QueueAwareContext, lastConfigError: { value?: str
 	}
 }
 
-function extractTextBlocks(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	return content
-		.flatMap((block) => {
-			if (!isRecord(block)) return [];
-			if (block.type !== "text") return [];
-			return typeof block.text === "string" ? [block.text] : [];
-		})
-		.join("\n")
-		.trim();
-}
-
-function extractUserText(content: unknown): string {
-	if (typeof content === "string") return content.trim();
-	return extractTextBlocks(content);
-}
-
-function matchesConfiguredError(errorText: string, patterns: string[]) {
-	const normalizedError = errorText.toLowerCase();
-	return patterns.some((pattern) => normalizedError.includes(pattern.toLowerCase()));
-}
-
-function hasContentBlockType(content: unknown, type: string) {
-	return Array.isArray(content) && content.some((block) => isRecord(block) && block.type === type);
-}
-
-function hasVisibleAssistantOutput(content: unknown) {
-	return extractTextBlocks(content).length > 0 || hasContentBlockType(content, "toolCall");
-}
-
-function isThinkingOnlyStop(content: unknown) {
-	return hasContentBlockType(content, "thinking") && !hasVisibleAssistantOutput(content);
-}
-
-function getAutoContinueReason(
-	message: {
-		stopReason?: string;
-		content?: unknown;
-		errorMessage?: string;
-	},
-	config: AutoContinueConfig,
-	context: {
-		previousMessageRole?: string;
-	},
-) {
-	if (message.stopReason === "error") {
-		const errorText = [message.errorMessage, extractTextBlocks(message.content)]
-			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-			.join("\n");
-		if (!errorText || !matchesConfiguredError(errorText, config.errorPatterns)) return undefined;
-		return {
-			kind: "error",
-			notification: "Matched a configured error",
-		};
-	}
-
-	if (message.stopReason === "length" && config.autoContinueOnLength) {
-		return {
-			kind: "length",
-			notification: "Assistant stopped with stopReason \"length\"",
-		};
-	}
-
-	if (message.stopReason !== "stop") return undefined;
-
-	if (config.autoContinueOnThinkingOnlyStop && isThinkingOnlyStop(message.content)) {
-		return {
-			kind: "thinkingOnlyStop",
-			notification: "Assistant stopped after emitting only thinking content",
-		};
-	}
-
-	if (
-		config.autoContinueOnSilentStopAfterTool &&
-		context.previousMessageRole === "toolResult" &&
-		!hasVisibleAssistantOutput(message.content)
-	) {
-		return {
-			kind: "silentStopAfterTool",
-			notification: "Assistant stopped after a tool result without emitting visible output",
-		};
-	}
-
-	return undefined;
-}
-
 export default function (pi: ExtensionAPI) {
 	let consecutiveAutoRetries = 0;
 	let pendingAutoRetryMessage: string | undefined;
 	let previousMessageRole: string | undefined;
+	let lastUserMessageWasAutoRetry = false;
 	const lastConfigError: { value?: string } = {};
 
 	pi.registerCommand("pi-hodor:setup", {
@@ -288,11 +199,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_end", async (event, ctx) => {
 		const messageRole = event.message.role;
 		const previousRole = previousMessageRole;
+		const previousMessageWasAutoRetry = previousRole === "user" && lastUserMessageWasAutoRetry;
 		previousMessageRole = messageRole;
+		lastUserMessageWasAutoRetry = false;
 
 		if (messageRole === "user") {
 			const userText = extractUserText(event.message.content);
 			if (pendingAutoRetryMessage && userText === pendingAutoRetryMessage) {
+				lastUserMessageWasAutoRetry = true;
 				pendingAutoRetryMessage = undefined;
 				return;
 			}
@@ -319,6 +233,7 @@ export default function (pi: ExtensionAPI) {
 
 		const autoContinueReason = getAutoContinueReason(event.message, config, {
 			previousMessageRole: previousRole,
+			previousMessageWasAutoRetry,
 		});
 		if (!autoContinueReason) {
 			consecutiveAutoRetries = 0;

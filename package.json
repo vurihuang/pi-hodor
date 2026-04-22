@@ -1,6 +1,6 @@
 {
   "name": "pi-hodor",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A pi extension that automatically continues after transient stream and connection errors.",
   "type": "module",
   "keywords": [
@@ -22,6 +22,7 @@
   },
   "files": [
     "index.ts",
+    "auto-continue.ts",
     "config.json",
     "README.md",
     "LICENSE"
