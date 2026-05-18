@@ -177,7 +177,18 @@ export default function (pi: ExtensionAPI) {
 	let pendingAutoRetryMessage: string | undefined;
 	let previousMessageRole: string | undefined;
 	let lastUserMessageWasAutoRetry = false;
+	let autoContinueSuppressed = false;
 	const lastConfigError: { value?: string } = {};
+
+	function resetAutoRetryState() {
+		consecutiveAutoRetries = 0;
+		pendingAutoRetryMessage = undefined;
+	}
+
+	function suppressAutoContinue() {
+		autoContinueSuppressed = true;
+		resetAutoRetryState();
+	}
 
 	pi.registerCommand("pi-hodor:setup", {
 		description: `Copy the default ${EXTENSION_NAME} config to ${GLOBAL_CONFIG_PATH}`,
@@ -196,6 +207,19 @@ export default function (pi: ExtensionAPI) {
 		await ensureBundledConfigFile();
 	});
 
+	pi.registerShortcut("escape", {
+		description: `Stop ${EXTENSION_NAME} automatic continue loop`,
+		handler: async () => {
+			suppressAutoContinue();
+		},
+	});
+
+	pi.on("input", async (event) => {
+		if (event.source !== "extension") {
+			autoContinueSuppressed = false;
+		}
+	});
+
 	pi.on("message_end", async (event, ctx) => {
 		const messageRole = event.message.role;
 		const previousRole = previousMessageRole;
@@ -210,8 +234,8 @@ export default function (pi: ExtensionAPI) {
 				pendingAutoRetryMessage = undefined;
 				return;
 			}
-			consecutiveAutoRetries = 0;
-			pendingAutoRetryMessage = undefined;
+			autoContinueSuppressed = false;
+			resetAutoRetryState();
 			return;
 		}
 
@@ -241,6 +265,11 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (ctx.signal?.aborted) {
+			suppressAutoContinue();
+			return;
+		}
+		if (autoContinueSuppressed) return;
 		if (ctx.hasPendingMessages()) return;
 		if (consecutiveAutoRetries >= config.maxConsecutiveAutoRetries) {
 			if (config.notifyOnAutoContinue) {
