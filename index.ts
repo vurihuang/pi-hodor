@@ -40,6 +40,35 @@ const DEFAULT_CONFIG: AutoContinueConfig = {
 	autoContinueOnLength: true,
 	autoContinueOnThinkingOnlyStop: true,
 	autoContinueOnSilentStopAfterTool: true,
+	deferredErrorPatterns: [
+		"overloaded",
+		"provider returned error",
+		"provider error",
+		"rate limit",
+		"too many requests",
+		"429",
+		"500",
+		"502",
+		"503",
+		"504",
+		"service unavailable",
+		"server error",
+		"internal error",
+		"network error",
+		"connection error",
+		"connection refused",
+		"other side closed",
+		"fetch failed",
+		"upstream connect",
+		"reset before headers",
+		"socket hang up",
+		"ended without",
+		"timed out",
+		"timeout",
+		"terminated",
+		"retry delay",
+		"WebSocket error",
+	],
 	errorPatterns: [
 		"上游流式响应中断",
 		"error decoding response body",
@@ -65,14 +94,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+function normalizeStringList(value: unknown) {
+	if (!Array.isArray(value)) return undefined;
+	return value
+		.filter((pattern): pattern is string => typeof pattern === "string")
+		.map((pattern) => pattern.trim())
+		.filter(Boolean);
+}
+
 function normalizeConfig(raw: unknown): AutoContinueConfig {
 	const config = isRecord(raw) ? raw : {};
-	const errorPatterns = Array.isArray(config.errorPatterns)
-		? config.errorPatterns
-				.filter((pattern): pattern is string => typeof pattern === "string")
-				.map((pattern) => pattern.trim())
-				.filter(Boolean)
-		: DEFAULT_CONFIG.errorPatterns;
+	const errorPatterns = normalizeStringList(config.errorPatterns) ?? DEFAULT_CONFIG.errorPatterns;
+	const deferredErrorPatterns = normalizeStringList(config.deferredErrorPatterns) ?? DEFAULT_CONFIG.deferredErrorPatterns;
 	const retryMessage =
 		typeof config.retryMessage === "string" && config.retryMessage.trim().length > 0
 			? config.retryMessage.trim()
@@ -102,6 +135,7 @@ function normalizeConfig(raw: unknown): AutoContinueConfig {
 			typeof config.autoContinueOnSilentStopAfterTool === "boolean"
 				? config.autoContinueOnSilentStopAfterTool
 				: DEFAULT_CONFIG.autoContinueOnSilentStopAfterTool,
+		deferredErrorPatterns,
 		errorPatterns: errorPatterns.length > 0 ? errorPatterns : DEFAULT_CONFIG.errorPatterns,
 	};
 }

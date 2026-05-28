@@ -21,7 +21,8 @@ It is useful when model output is interrupted by provider-side failures such as 
 - Automatically continues on silent `stopReason === "stop"` immediately after a tool result when the assistant emitted no visible output
 - Automatically continues again when its own retry message is followed by another silent `stopReason === "stop"`
 - Matches `stopReason === "error"` text against configurable substring patterns
-- Automatically sends a configurable retry message when a match is found
+- Defers configured errors that should be left to pi's built-in auto-retry, such as `WebSocket error`
+- Automatically sends a configurable retry message when an error matches `errorPatterns` but not `deferredErrorPatterns`
 - Prevents runaway loops with a configurable retry limit
 - Optionally shows UI notifications when an auto-retry happens
 - Supports project-level and global config overrides without modifying the packaged files
@@ -72,7 +73,7 @@ Once the extension is loaded, there is nothing else to trigger manually.
 
 When pi receives an assistant message that matches one of these conditions, `pi-hodor` automatically sends the configured retry message:
 
-1. it ends with `stopReason === "error"` and its text matches one of the configured error patterns
+1. it ends with `stopReason === "error"`, its text matches `errorPatterns`, and it does not match `deferredErrorPatterns`
 2. it ends with `stopReason === "length"` and `autoContinueOnLength` is enabled
 3. it ends with `stopReason === "stop"`, emitted thinking content, and emitted neither text nor tool calls, and `autoContinueOnThinkingOnlyStop` is enabled
 4. it ends with `stopReason === "stop"`, emitted no visible output, the previous message was a user message, and `autoContinueOnSilentStopAfterTool` is enabled
@@ -175,6 +176,11 @@ The package ships with its own `config.json`, which acts as the final fallback w
   "autoContinueOnLength": true,
   "autoContinueOnThinkingOnlyStop": true,
   "autoContinueOnSilentStopAfterTool": true,
+  "deferredErrorPatterns": [
+    "WebSocket error",
+    "fetch failed",
+    "socket hang up"
+  ],
   "errorPatterns": [
     "error decoding response body",
     "stream disconnected before completion",
@@ -194,6 +200,7 @@ The package ships with its own `config.json`, which acts as the final fallback w
 | `autoContinueOnLength` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "length"`. |
 | `autoContinueOnThinkingOnlyStop` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "stop"` after emitting only thinking content and no text or tool calls. |
 | `autoContinueOnSilentStopAfterTool` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "stop"` after a user message, after a `toolResult`, or immediately after the extension's own retry message, and emits no visible output. |
+| `deferredErrorPatterns` | `string[]` | Case-insensitive substrings for errors hodor should skip because pi or another layer handles them. Set to `[]` to disable error deferral. |
 | `errorPatterns` | `string[]` | Case-insensitive substrings used to detect transient failures for `stopReason === "error"`. |
 
 ## Development

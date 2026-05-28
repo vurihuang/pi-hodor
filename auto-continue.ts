@@ -6,6 +6,7 @@ export interface AutoContinueConfig {
 	autoContinueOnLength: boolean;
 	autoContinueOnThinkingOnlyStop: boolean;
 	autoContinueOnSilentStopAfterTool: boolean;
+	deferredErrorPatterns: string[];
 	errorPatterns: string[];
 }
 
@@ -63,7 +64,8 @@ export function getAutoContinueReason(
 		const errorText = [message.errorMessage, extractTextBlocks(message.content)]
 			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
 			.join("\n");
-		if (!errorText || !matchesConfiguredError(errorText, config.errorPatterns)) return undefined;
+		if (!errorText || matchesConfiguredError(errorText, config.deferredErrorPatterns)) return undefined;
+		if (!matchesConfiguredError(errorText, config.errorPatterns)) return undefined;
 		return {
 			kind: "error",
 			notification: "Matched a configured error",

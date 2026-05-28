@@ -10,6 +10,7 @@ const config: AutoContinueConfig = {
 	autoContinueOnLength: true,
 	autoContinueOnThinkingOnlyStop: true,
 	autoContinueOnSilentStopAfterTool: true,
+	deferredErrorPatterns: ["WebSocket error"],
 	errorPatterns: ["ECONNRESET"],
 };
 
@@ -42,5 +43,28 @@ test("getAutoContinueReason retries a silent stop after a normal user message", 
 	assert.deepEqual(reason, {
 		kind: "silentStopAfterUser",
 		notification: "Assistant stopped after a user message without emitting visible output",
+	});
+});
+
+test("getAutoContinueReason defers configured errors that match deferred patterns", () => {
+	const reason = getAutoContinueReason(
+		{ stopReason: "error", errorMessage: "Error: WebSocket error" },
+		{ ...config, errorPatterns: ["WebSocket error"] },
+		{},
+	);
+
+	assert.equal(reason, undefined);
+});
+
+test("getAutoContinueReason retries configured errors when deferred patterns are empty", () => {
+	const reason = getAutoContinueReason(
+		{ stopReason: "error", errorMessage: "Error: WebSocket error" },
+		{ ...config, deferredErrorPatterns: [], errorPatterns: ["WebSocket error"] },
+		{},
+	);
+
+	assert.deepEqual(reason, {
+		kind: "error",
+		notification: "Matched a configured error",
 	});
 });
