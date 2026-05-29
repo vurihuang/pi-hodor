@@ -4,6 +4,7 @@
   "maxConsecutiveAutoRetries": 99,
   "notifyOnAutoContinue": true,
   "autoContinueOnLength": true,
+  "minRemainingTokensForLengthAutoContinue": 16384,
   "autoContinueOnThinkingOnlyStop": true,
   "autoContinueOnSilentStopAfterTool": true,
   "deferredErrorPatterns": [

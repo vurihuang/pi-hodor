@@ -10,12 +10,12 @@
 
 `pi-hodor` is a pi extension that automatically sends a follow-up retry message when an assistant response stops in a retryable way.
 
-It is useful when model output is interrupted by provider-side failures such as `ECONNRESET`, `ETIMEDOUT`, premature stream closure, or partial JSON responses. It can also continue when the assistant stops because it hit a length limit, when it ends with a normal `stop` but only emitted thinking content and never produced user-visible text or tool calls, when it ends with a silent `stop` immediately after a user message without producing any visible follow-up, when it ends with a silent `stop` immediately after a tool result without producing any visible follow-up, or when an automatic retry message such as `continue` is followed by another silent `stop`. Instead of stopping and waiting for manual intervention, the extension detects these cases and sends a configurable retry message such as `continue`.
+It is useful when model output is interrupted by provider-side failures such as `ECONNRESET`, `ETIMEDOUT`, premature stream closure, or partial JSON responses. It can also continue when the assistant stops because it hit a length limit and enough context remains, when it ends with a normal `stop` but only emitted thinking content and never produced user-visible text or tool calls, when it ends with a silent `stop` immediately after a user message without producing any visible follow-up, when it ends with a silent `stop` immediately after a tool result without producing any visible follow-up, or when an automatic retry message such as `continue` is followed by another silent `stop`. Instead of stopping and waiting for manual intervention, the extension detects these cases and sends a configurable retry message such as `continue`.
 
 ## Features
 
 - Watches assistant messages that end with retryable stop reasons
-- Automatically continues on `stopReason === "length"`
+- Automatically continues on `stopReason === "length"` when enough context remains
 - Automatically continues on `stopReason === "stop"` when the assistant emitted only thinking content
 - Automatically continues on silent `stopReason === "stop"` immediately after a user message when the assistant emitted no visible output
 - Automatically continues on silent `stopReason === "stop"` immediately after a tool result when the assistant emitted no visible output
@@ -74,7 +74,7 @@ Once the extension is loaded, there is nothing else to trigger manually.
 When pi receives an assistant message that matches one of these conditions, `pi-hodor` automatically sends the configured retry message:
 
 1. it ends with `stopReason === "error"`, its text matches `errorPatterns`, and it does not match `deferredErrorPatterns`
-2. it ends with `stopReason === "length"` and `autoContinueOnLength` is enabled
+2. it ends with `stopReason === "length"`, `autoContinueOnLength` is enabled, and the remaining context is above the configured length-continue safety threshold
 3. it ends with `stopReason === "stop"`, emitted thinking content, and emitted neither text nor tool calls, and `autoContinueOnThinkingOnlyStop` is enabled
 4. it ends with `stopReason === "stop"`, emitted no visible output, the previous message was a user message, and `autoContinueOnSilentStopAfterTool` is enabled
 5. it ends with `stopReason === "stop"`, emitted no visible output, the previous message was a `toolResult`, and `autoContinueOnSilentStopAfterTool` is enabled
@@ -174,6 +174,7 @@ The package ships with its own `config.json`, which acts as the final fallback w
   "maxConsecutiveAutoRetries": 99,
   "notifyOnAutoContinue": true,
   "autoContinueOnLength": true,
+  "minRemainingTokensForLengthAutoContinue": 16384,
   "autoContinueOnThinkingOnlyStop": true,
   "autoContinueOnSilentStopAfterTool": true,
   "deferredErrorPatterns": [
@@ -198,6 +199,7 @@ The package ships with its own `config.json`, which acts as the final fallback w
 | `maxConsecutiveAutoRetries` | `number` | Maximum automatic retries before the extension stops retrying. |
 | `notifyOnAutoContinue` | `boolean` | Shows a UI notification when an automatic retry happens or when the retry limit is reached. |
 | `autoContinueOnLength` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "length"`. |
+| `minRemainingTokensForLengthAutoContinue` | `number` | Defers length auto-continue when known remaining context tokens are at or below this value, so pi can compact first. Set to `0` to disable this guard. |
 | `autoContinueOnThinkingOnlyStop` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "stop"` after emitting only thinking content and no text or tool calls. |
 | `autoContinueOnSilentStopAfterTool` | `boolean` | Automatically retries when an assistant message ends with `stopReason === "stop"` after a user message, after a `toolResult`, or immediately after the extension's own retry message, and emits no visible output. |
 | `deferredErrorPatterns` | `string[]` | Case-insensitive substrings for errors hodor should skip because pi or another layer handles them. Set to `[]` to disable error deferral. |

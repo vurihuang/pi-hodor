@@ -2,27 +2,12 @@ import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import {
-	extractUserText,
-	getAutoContinueReason,
-	type AutoContinueConfig,
-} from "./auto-continue.ts";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { extractUserText, getAutoContinueDecision, type AutoContinueConfig } from "./auto-continue.ts";
 
-type NotifyLevel = "info" | "success" | "warning" | "error";
-
-type NotifierContext = {
-	hasUI: boolean;
-	ui: {
-		notify(message: string, level: NotifyLevel): void;
-	};
-};
-
-type QueueAwareContext = NotifierContext & {
-	cwd: string;
-	isIdle(): boolean;
-	hasPendingMessages(): boolean;
-};
+type NotifyLevel = NonNullable<Parameters<ExtensionContext["ui"]["notify"]>[1]>;
+type NotifierContext = Pick<ExtensionContext, "hasUI" | "ui">;
+type ConfigContext = Pick<ExtensionContext, "cwd" | "hasUI" | "ui">;
 
 const EXTENSION_NAME = "pi-hodor";
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +23,7 @@ const DEFAULT_CONFIG: AutoContinueConfig = {
 	maxConsecutiveAutoRetries: 99,
 	notifyOnAutoContinue: true,
 	autoContinueOnLength: true,
+	minRemainingTokensForLengthAutoContinue: 16_384,
 	autoContinueOnThinkingOnlyStop: true,
 	autoContinueOnSilentStopAfterTool: true,
 	deferredErrorPatterns: [
@@ -102,6 +88,10 @@ function normalizeStringList(value: unknown) {
 		.filter(Boolean);
 }
 
+function normalizeNonNegativeNumber(value: unknown, fallback: number) {
+	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
 function normalizeConfig(raw: unknown): AutoContinueConfig {
 	const config = isRecord(raw) ? raw : {};
 	const errorPatterns = normalizeStringList(config.errorPatterns) ?? DEFAULT_CONFIG.errorPatterns;
@@ -110,10 +100,9 @@ function normalizeConfig(raw: unknown): AutoContinueConfig {
 		typeof config.retryMessage === "string" && config.retryMessage.trim().length > 0
 			? config.retryMessage.trim()
 			: DEFAULT_CONFIG.retryMessage;
-	const maxConsecutiveAutoRetries =
-		typeof config.maxConsecutiveAutoRetries === "number" && Number.isFinite(config.maxConsecutiveAutoRetries)
-			? Math.max(0, Math.floor(config.maxConsecutiveAutoRetries))
-			: DEFAULT_CONFIG.maxConsecutiveAutoRetries;
+	const maxConsecutiveAutoRetries = Math.floor(
+		normalizeNonNegativeNumber(config.maxConsecutiveAutoRetries, DEFAULT_CONFIG.maxConsecutiveAutoRetries),
+	);
 
 	return {
 		enabled: typeof config.enabled === "boolean" ? config.enabled : DEFAULT_CONFIG.enabled,
@@ -127,6 +116,10 @@ function normalizeConfig(raw: unknown): AutoContinueConfig {
 			typeof config.autoContinueOnLength === "boolean"
 				? config.autoContinueOnLength
 				: DEFAULT_CONFIG.autoContinueOnLength,
+		minRemainingTokensForLengthAutoContinue: normalizeNonNegativeNumber(
+			config.minRemainingTokensForLengthAutoContinue,
+			DEFAULT_CONFIG.minRemainingTokensForLengthAutoContinue,
+		),
 		autoContinueOnThinkingOnlyStop:
 			typeof config.autoContinueOnThinkingOnlyStop === "boolean"
 				? config.autoContinueOnThinkingOnlyStop
@@ -183,7 +176,7 @@ async function copyBundledConfig(destinationPath: string) {
 	await copyFile(BUNDLED_CONFIG_PATH, destinationPath);
 }
 
-async function loadConfig(ctx: QueueAwareContext, lastConfigError: { value?: string }) {
+async function loadConfig(ctx: ConfigContext, lastConfigError: { value?: string }) {
 	await ensureBundledConfigFile();
 	const configPath = await resolveConfigPath(ctx.cwd);
 
@@ -282,22 +275,24 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const config = await loadConfig(ctx as QueueAwareContext, lastConfigError);
+		const config = await loadConfig(ctx, lastConfigError);
 		if (!config.enabled) {
 			consecutiveAutoRetries = 0;
 			pendingAutoRetryMessage = undefined;
 			return;
 		}
 
-		const autoContinueReason = getAutoContinueReason(event.message, config, {
+		const decision = getAutoContinueDecision(event.message, config, {
 			previousMessageRole: previousRole,
 			previousMessageWasAutoRetry,
+			contextUsage: ctx.getContextUsage(),
 		});
-		if (!autoContinueReason) {
+		if (decision.action !== "continue") {
 			consecutiveAutoRetries = 0;
 			pendingAutoRetryMessage = undefined;
 			return;
 		}
+		const autoContinueReason = decision.reason;
 
 		if (ctx.signal?.aborted) {
 			suppressAutoContinue();
@@ -308,7 +303,7 @@ export default function (pi: ExtensionAPI) {
 		if (consecutiveAutoRetries >= config.maxConsecutiveAutoRetries) {
 			if (config.notifyOnAutoContinue) {
 				safeNotify(
-					ctx as QueueAwareContext,
+					ctx,
 					`[${EXTENSION_NAME}] Reached the consecutive auto-retry limit (${config.maxConsecutiveAutoRetries}). Skipping automatic \"${config.retryMessage}\".`,
 					"warning",
 				);
@@ -320,7 +315,7 @@ export default function (pi: ExtensionAPI) {
 		pendingAutoRetryMessage = config.retryMessage;
 		if (config.notifyOnAutoContinue) {
 			safeNotify(
-				ctx as QueueAwareContext,
+				ctx,
 				`[${EXTENSION_NAME}] ${autoContinueReason.notification}. Sending \"${config.retryMessage}\" automatically (${consecutiveAutoRetries}/${config.maxConsecutiveAutoRetries}).`,
 				"info",
 			);

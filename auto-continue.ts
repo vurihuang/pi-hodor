@@ -1,14 +1,33 @@
+import type { ContextUsage } from "@mariozechner/pi-coding-agent";
+
 export interface AutoContinueConfig {
 	enabled: boolean;
 	retryMessage: string;
 	maxConsecutiveAutoRetries: number;
 	notifyOnAutoContinue: boolean;
 	autoContinueOnLength: boolean;
+	minRemainingTokensForLengthAutoContinue: number;
 	autoContinueOnThinkingOnlyStop: boolean;
 	autoContinueOnSilentStopAfterTool: boolean;
 	deferredErrorPatterns: string[];
 	errorPatterns: string[];
 }
+
+export type AutoContinueReason = {
+	kind:
+		| "error"
+		| "length"
+		| "thinkingOnlyStop"
+		| "silentStopAfterTool"
+		| "silentStopAfterAutoRetry"
+		| "silentStopAfterUser";
+	notification: string;
+};
+
+export type AutoContinueDecision =
+	| { action: "continue"; reason: AutoContinueReason }
+	| { action: "defer"; kind: "lengthContextTooFull" }
+	| { action: "ignore" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -48,7 +67,16 @@ function isThinkingOnlyStop(content: unknown) {
 	return hasContentBlockType(content, "thinking") && !hasVisibleAssistantOutput(content);
 }
 
-export function getAutoContinueReason(
+function shouldDeferLengthAutoContinue(config: AutoContinueConfig, contextUsage?: ContextUsage) {
+	if (!contextUsage) return false;
+	if (config.minRemainingTokensForLengthAutoContinue <= 0) return false;
+	if (typeof contextUsage.tokens !== "number") return false;
+	if (!Number.isFinite(contextUsage.tokens) || !Number.isFinite(contextUsage.contextWindow)) return false;
+
+	return contextUsage.contextWindow - contextUsage.tokens <= config.minRemainingTokensForLengthAutoContinue;
+}
+
+export function getAutoContinueDecision(
 	message: {
 		stopReason?: string;
 		content?: unknown;
@@ -58,60 +86,82 @@ export function getAutoContinueReason(
 	context: {
 		previousMessageRole?: string;
 		previousMessageWasAutoRetry?: boolean;
+		contextUsage?: ContextUsage;
 	},
-) {
+): AutoContinueDecision {
 	if (message.stopReason === "error") {
 		const errorText = [message.errorMessage, extractTextBlocks(message.content)]
 			.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
 			.join("\n");
-		if (!errorText || matchesConfiguredError(errorText, config.deferredErrorPatterns)) return undefined;
-		if (!matchesConfiguredError(errorText, config.errorPatterns)) return undefined;
+		if (!errorText || matchesConfiguredError(errorText, config.deferredErrorPatterns)) return { action: "ignore" };
+		if (!matchesConfiguredError(errorText, config.errorPatterns)) return { action: "ignore" };
 		return {
-			kind: "error",
-			notification: "Matched a configured error",
+			action: "continue",
+			reason: {
+				kind: "error",
+				notification: "Matched a configured error",
+			},
 		};
 	}
 
 	if (message.stopReason === "length" && config.autoContinueOnLength) {
+		if (shouldDeferLengthAutoContinue(config, context.contextUsage)) {
+			return { action: "defer", kind: "lengthContextTooFull" };
+		}
 		return {
-			kind: "length",
-			notification: "Assistant stopped with stopReason \"length\"",
+			action: "continue",
+			reason: {
+				kind: "length",
+				notification: "Assistant stopped with stopReason \"length\"",
+			},
 		};
 	}
 
-	if (message.stopReason !== "stop") return undefined;
+	if (message.stopReason !== "stop") return { action: "ignore" };
 
 	if (config.autoContinueOnThinkingOnlyStop && isThinkingOnlyStop(message.content)) {
 		return {
-			kind: "thinkingOnlyStop",
-			notification: "Assistant stopped after emitting only thinking content",
+			action: "continue",
+			reason: {
+				kind: "thinkingOnlyStop",
+				notification: "Assistant stopped after emitting only thinking content",
+			},
 		};
 	}
 
 	if (!config.autoContinueOnSilentStopAfterTool || hasVisibleAssistantOutput(message.content)) {
-		return undefined;
+		return { action: "ignore" };
 	}
 
 	if (context.previousMessageRole === "toolResult") {
 		return {
-			kind: "silentStopAfterTool",
-			notification: "Assistant stopped after a tool result without emitting visible output",
+			action: "continue",
+			reason: {
+				kind: "silentStopAfterTool",
+				notification: "Assistant stopped after a tool result without emitting visible output",
+			},
 		};
 	}
 
 	if (context.previousMessageRole === "user" && context.previousMessageWasAutoRetry) {
 		return {
-			kind: "silentStopAfterAutoRetry",
-			notification: "Assistant stopped after an automatic retry without emitting visible output",
+			action: "continue",
+			reason: {
+				kind: "silentStopAfterAutoRetry",
+				notification: "Assistant stopped after an automatic retry without emitting visible output",
+			},
 		};
 	}
 
 	if (context.previousMessageRole === "user") {
 		return {
-			kind: "silentStopAfterUser",
-			notification: "Assistant stopped after a user message without emitting visible output",
+			action: "continue",
+			reason: {
+				kind: "silentStopAfterUser",
+				notification: "Assistant stopped after a user message without emitting visible output",
+			},
 		};
 	}
 
-	return undefined;
+	return { action: "ignore" };
 }
